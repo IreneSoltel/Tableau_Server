@@ -1,26 +1,16 @@
 import streamlit as st
 import pandas as pd
-import glob
-import os
+import io
 import tableauserverclient as tsc
-import tempfile
-import shutil
-from pathlib import Path
 
 st.set_page_config(page_title="Unificador de Archivos para Tableau", page_icon="📊", layout="wide")
 
-def unificar_archivos(directorio, patron_archivos, nombre_hoja):
+def unificar_archivos_subidos(archivos, nombre_hoja):
     """
-    Unifica los archivos que coinciden con el patrón en el directorio especificado
+    Unifica los archivos subidos en un solo DataFrame
     """
-    # Crear la ruta completa con el patrón
-    ruta_completa = os.path.join(directorio, patron_archivos)
-    
-    # Buscar todos los archivos que coincidan con el patrón
-    archivos = glob.glob(ruta_completa)
-    
     if not archivos:
-        return None, f"No se encontraron archivos que coincidan con el patrón '{patron_archivos}' en el directorio seleccionado."
+        return None, "No se han seleccionado archivos."
     
     # Mostrar progreso
     progress_bar = st.progress(0)
@@ -33,13 +23,13 @@ def unificar_archivos(directorio, patron_archivos, nombre_hoja):
     # Procesar cada archivo
     for i, archivo in enumerate(archivos):
         try:
-            # Obtener solo el nombre del archivo para el registro
-            nombre_archivo = os.path.basename(archivo)
+            # Obtener el nombre del archivo
+            nombre_archivo = archivo.name
             st.write(f"Procesando: {nombre_archivo}")
             
             # Detectar la extensión para usar el motor adecuado
-            extension = os.path.splitext(archivo)[1].lower()
-            if extension == '.xls':
+            extension = nombre_archivo.lower().split('.')[-1]
+            if extension == 'xls':
                 engine = 'xlrd'
             else:
                 engine = None  # Pandas determinará automáticamente el motor para xlsx
@@ -69,29 +59,6 @@ def unificar_archivos(directorio, patron_archivos, nombre_hoja):
     df_final = pd.concat(dfs, ignore_index=True)
     
     return df_final, f"Se han unificado {archivos_ok} archivos con un total de {len(df_final)} filas."
-
-def guardar_archivo_unificado(df, directorio, nombre_archivo="Archivo_Unificado.xlsx", nombre_hoja="Datos"):
-    """
-    Guarda el DataFrame en un archivo Excel
-    """
-    if df is None:
-        return None, "No hay datos para guardar."
-    
-    # Ruta completa del archivo de salida
-    archivo_salida = os.path.join(directorio, nombre_archivo)
-    
-    try:
-        # Usar opciones más seguras para guardar
-        with pd.ExcelWriter(
-            archivo_salida,
-            engine='openpyxl',
-            mode='w'  # Sobrescribir si existe
-        ) as writer:
-            df.to_excel(writer, sheet_name=nombre_hoja, index=False)
-            
-        return archivo_salida, f"Archivo unificado guardado exitosamente en: {archivo_salida}"
-    except Exception as e:
-        return None, f"Error al guardar el archivo: {str(e)}"
 
 def conectar_tableau_server(server_url, site_name, username, password, disable_ssl):
     """
@@ -163,38 +130,36 @@ def main():
     with tab1:
         st.header("Unificación de Archivos")
         
-        # Formulario para unificar archivos
-        with st.form("unificar_form"):
-            st.write("### Configuración de archivos")
-            
-            directorio = st.text_input("Directorio donde están los archivos:", 
-                                      help="Introduce la ruta completa al directorio donde se encuentran los archivos (ej. C:\\Datos\\MisArchivos)")
-            
-            patron_archivos = st.text_input("Patrón de archivos a unificar:", 
-                                           placeholder="ej. OpsCenter_*.xls",
-                                           help="Introduce el patrón para identificar los archivos a unificar (ej. reporte_*.xlsx)")
-            
-            nombre_hoja = st.text_input("Nombre de la hoja a leer:", 
-                                       value="Itemization",
-                                       help="Nombre exacto de la hoja que se debe leer en cada archivo Excel")
-            
-            nombre_salida = st.text_input("Nombre del archivo unificado:", 
-                                        value="Archivo_Unificado.xlsx",
-                                        help="Nombre del archivo de salida donde se guardarán todos los datos")
-            
-            nombre_hoja_salida = st.text_input("Nombre de la hoja de salida:", 
-                                             value="Datos_Unificados",
-                                             help="Nombre de la hoja en el archivo de salida")
-            
-            submit_button = st.form_submit_button("Unificar Archivos")
+        st.write("### Subir archivos")
+        st.write("Selecciona los archivos Excel que deseas unificar:")
         
-        if submit_button:
-            if not directorio or not patron_archivos or not nombre_hoja:
-                st.error("Por favor, completa todos los campos requeridos.")
+        # Selector de archivos
+        uploaded_files = st.file_uploader(
+            "Arrastra aquí los archivos o haz clic para seleccionarlos", 
+            type=["xls", "xlsx"], 
+            accept_multiple_files=True
+        )
+        
+        # Campos adicionales
+        nombre_hoja = st.text_input("Nombre de la hoja a leer:", 
+                                   value="Itemization",
+                                   help="Nombre exacto de la hoja que se debe leer en cada archivo Excel")
+        
+        nombre_hoja_salida = st.text_input("Nombre de la hoja de salida:", 
+                                         value="Datos_Unificados",
+                                         help="Nombre de la hoja en el archivo unificado")
+        
+        unificar_button = st.button("Unificar Archivos")
+        
+        if unificar_button:
+            if not uploaded_files:
+                st.error("Por favor, sube al menos un archivo.")
+            elif not nombre_hoja:
+                st.error("Por favor, especifica el nombre de la hoja a leer.")
             else:
                 with st.spinner("Unificando archivos..."):
-                    # Ejecutar la unificación
-                    df_unificado, mensaje = unificar_archivos(directorio, patron_archivos, nombre_hoja)
+                    # Ejecutar la unificación con los archivos subidos
+                    df_unificado, mensaje = unificar_archivos_subidos(uploaded_files, nombre_hoja)
                     
                     if df_unificado is not None:
                         st.success(mensaje)
@@ -203,28 +168,25 @@ def main():
                         st.write("### Vista previa de los datos unificados:")
                         st.dataframe(df_unificado.head(10))
                         
-                        # Guardar el archivo unificado
-                        archivo_guardado, msg_guardado = guardar_archivo_unificado(
-                            df_unificado, directorio, nombre_salida, nombre_hoja_salida
-                        )
+                        # Guardar en la sesión para usar en la siguiente pestaña
+                        st.session_state.df_unificado = df_unificado
                         
-                        if archivo_guardado:
-                            st.success(msg_guardado)
-                            
-                            # Guardar en la sesión para usar en la siguiente pestaña
-                            st.session_state.df_unificado = df_unificado
-                            st.session_state.archivo_unificado = archivo_guardado
-                            
-                            # Mostrar botón para descargar el archivo
-                            with open(archivo_guardado, "rb") as file:
-                                btn = st.download_button(
-                                    label="Descargar archivo unificado",
-                                    data=file,
-                                    file_name=nombre_salida,
-                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                                )
-                        else:
-                            st.error(msg_guardado)
+                        # Preparar archivo para descarga
+                        excel_buffer = io.BytesIO()
+                        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                            df_unificado.to_excel(writer, sheet_name=nombre_hoja_salida, index=False)
+                        
+                        excel_buffer.seek(0)
+                        st.session_state.excel_buffer = excel_buffer
+                        st.session_state.nombre_archivo = "Archivo_Unificado.xlsx"
+                        
+                        # Mostrar botón para descargar el archivo
+                        st.download_button(
+                            label="📥 Descargar archivo unificado",
+                            data=excel_buffer,
+                            file_name="Archivo_Unificado.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
                     else:
                         st.error(mensaje)
     
@@ -232,10 +194,10 @@ def main():
         st.header("Conexión a Tableau Server")
         
         # Verificar si ya existe un archivo unificado
-        if not hasattr(st.session_state, 'archivo_unificado'):
+        if not hasattr(st.session_state, 'df_unificado'):
             st.warning("⚠️ Primero debes unificar los archivos en la pestaña anterior.")
         else:
-            st.success(f"✅ Archivo unificado listo: {os.path.basename(st.session_state.archivo_unificado)}")
+            st.success(f"✅ Datos unificados listos para subir a Tableau Server")
             
             # Formulario para conectar a Tableau
             with st.form("tableau_form"):
@@ -304,15 +266,24 @@ def main():
                                     st.warning(f"⚠️ La versión de API {server.version} no soporta actualización automática de extractos (requiere 2.8+)")
                                     st.info("Se requiere actualización manual a través de la interfaz web")
                                     
-                                    # Mostrar instrucciones
-                                    st.write("### Instrucciones para actualización manual:")
-                                    st.code(f"""
-1. Inicia sesión en Tableau Server: {tableau_server}
-2. Navega a la fuente de datos: {nombre_fuente_datos}
-3. Selecciona 'Actualizar ahora' o 'Reemplazar fuente de datos'
-4. Sube el archivo unificado: {os.path.basename(st.session_state.archivo_unificado)}
-   (Ubicación completa: {st.session_state.archivo_unificado})
-                                    """)
+                                    # Ofrecer descarga para actualización manual
+                                    if hasattr(st.session_state, 'excel_buffer'):
+                                        st.write("### Instrucciones para actualización manual:")
+                                        st.code(f"""
+1. Descarga el archivo unificado usando el botón de abajo
+2. Inicia sesión en Tableau Server: {tableau_server}
+3. Navega a la fuente de datos: {nombre_fuente_datos}
+4. Selecciona 'Actualizar ahora' o 'Reemplazar fuente de datos'
+5. Sube el archivo unificado descargado
+                                        """)
+                                        
+                                        # Re-mostrar el botón de descarga
+                                        st.download_button(
+                                            label="📥 Descargar archivo para actualización manual",
+                                            data=st.session_state.excel_buffer,
+                                            file_name=st.session_state.nombre_archivo,
+                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                        )
                                 else:
                                     # Intentar actualización automática
                                     st.write("Solicitando actualización de extracción...")
@@ -322,6 +293,25 @@ def main():
                                     except Exception as e:
                                         st.error(f"Error al solicitar la actualización: {str(e)}")
                                         st.info("Se requiere actualización manual a través de la interfaz web")
+                                        
+                                        # Ofrecer descarga para actualización manual
+                                        if hasattr(st.session_state, 'excel_buffer'):
+                                            st.write("### Instrucciones para actualización manual:")
+                                            st.code(f"""
+1. Descarga el archivo unificado usando el botón de abajo
+2. Inicia sesión en Tableau Server: {tableau_server}
+3. Navega a la fuente de datos: {nombre_fuente_datos}
+4. Selecciona 'Actualizar ahora' o 'Reemplazar fuente de datos'
+5. Sube el archivo unificado descargado
+                                            """)
+                                            
+                                            # Re-mostrar el botón de descarga
+                                            st.download_button(
+                                                label="📥 Descargar archivo para actualización manual",
+                                                data=st.session_state.excel_buffer,
+                                                file_name=st.session_state.nombre_archivo,
+                                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                            )
                             else:
                                 st.error(ds_mensaje)
                                 
@@ -353,11 +343,11 @@ def main():
         
         #### Pestaña 1: Unificar Archivos
         
-        1. **Directorio**: Introduce la ruta completa donde están los archivos (por ejemplo, `C:\\Usuarios\\MiUsuario\\Documentos\\Datos`)
-        2. **Patrón de archivos**: Introduce un patrón para seleccionar los archivos (por ejemplo, `OpsCenter_*.xls` seleccionará todos los archivos .xls que empiecen con "OpsCenter_")
-        3. **Nombre de la hoja**: Indica el nombre exacto de la hoja que deseas leer en cada archivo
-        4. **Nombre del archivo unificado**: Define cómo se llamará el archivo final
-        5. **Nombre de la hoja de salida**: Define cómo se llamará la hoja en el archivo unificado
+        1. **Subir archivos**: Arrastra o selecciona los archivos Excel que deseas unificar
+        2. **Nombre de la hoja**: Indica el nombre exacto de la hoja que deseas leer en cada archivo
+        3. **Nombre de la hoja de salida**: Define cómo se llamará la hoja en el archivo unificado
+        4. **Unificar**: Haz clic en el botón "Unificar Archivos" y espera a que se procesen
+        5. **Descargar**: Una vez completado, podrás descargar el archivo unificado
         
         #### Pestaña 2: Conectar a Tableau
         
@@ -365,10 +355,12 @@ def main():
         2. **Configuración del sitio**: Marca si es el sitio predeterminado o introduce el ID del sitio
         3. **Autenticación**: Configura cómo te vas a autenticar (con o sin dominio)
         4. **Nombre de la fuente de datos**: Introduce el nombre exacto de la fuente de datos a actualizar
+        5. **Conectar**: Haz clic en "Conectar a Tableau Server" para intentar la actualización
         
         ### Notas importantes
         
-        - La aplicación guardará el archivo unificado en el mismo directorio donde están los archivos originales
+        - La aplicación procesa los archivos Excel en el navegador, no necesitas rutas de directorio locales
+        - Puedes descargar el archivo unificado para guardarlo en tu computadora
         - La actualización automática solo funciona si el servidor Tableau tiene una versión de API 2.8 o superior
         - En caso de error, sigue las instrucciones para actualización manual
         """)
